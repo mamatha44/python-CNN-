@@ -1,1 +1,202 @@
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from skimage.metrics import structural_similarity as ssim
+from tkinter import Tk, Label, Button, filedialog, messagebox
+
+# Global variables for storing image paths
+selected_image_path = None
+reference_image_path = None
+
+# Function to load an image using a file dialog
+def select_image():
+    global selected_image_path
+    file_path = filedialog.askopenfilename(
+        title="Select an Image",
+        filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp")]
+    )
+    if file_path:
+        selected_image_path = file_path
+        messagebox.showinfo("Image Selected", f"Selected Image: {file_path}")
+    else:
+        selected_image_path = None
+        messagebox.showwarning("No Image Selected", "Please select an image to proceed.")
+
+# Function to load the reference image using a file dialog
+def select_reference_image():
+    global reference_image_path
+    file_path = filedialog.askopenfilename(
+        title="Select the Reference Image",
+        filetypes=[("Image Files", "*.jpg;*.jpeg;*.png;*.bmp")]
+    )
+    if file_path:
+        reference_image_path = file_path
+        messagebox.showinfo("Reference Image Selected", f"Reference Image: {file_path}")
+    else:
+        reference_image_path = None
+        messagebox.showwarning("No Reference Image Selected", "Please select a reference image.")
+
+# Extract and display matched features
+def display_matched_features(img, reference_image, keypoints1, keypoints2, matches):
+    fig, axes = plt.subplots(len(matches[:7]), 2, figsize=(10, 15))
+
+    for i, match in enumerate(matches[:7]):
+        pt1 = np.round(keypoints1[match.queryIdx].pt).astype(int)
+        pt2 = np.round(keypoints2[match.trainIdx].pt).astype(int)
+
+        patch_size = 20  # Size of the feature patch
+
+        # Extract patches around matched keypoints
+        feature1 = img[max(pt1[1] - patch_size, 0): pt1[1] + patch_size, max(pt1[0] - patch_size, 0): pt1[0] + patch_size]
+        feature2 = reference_image[max(pt2[1] - patch_size, 0): pt2[1] + patch_size, max(pt2[0] - patch_size, 0): pt2[0] + patch_size]
+
+        axes[i, 0].imshow(feature1, cmap="gray")
+        axes[i, 0].set_title(f"Feature {i + 1} - Selected Image")
+        axes[i, 0].axis("off")
+
+        axes[i, 1].imshow(feature2, cmap="gray")
+        axes[i, 1].set_title(f"Feature {i + 1} - Reference Image")
+        axes[i, 1].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+# Function to process an image using SSIM and feature matching
+def process_image_with_features(image_path):
+    if not image_path:
+        messagebox.showerror("No Image", "No image provided for processing.")
+        return
+    if not reference_image_path:
+        messagebox.showerror("No Reference Image", "No reference image selected! Please select a reference image.")
+        return
+
+    # Load the selected and reference images
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    reference_image = cv2.imread(reference_image_path, cv2.IMREAD_GRAYSCALE)
+
+    if img is None or reference_image is None:
+        messagebox.showerror("Error", "Failed to load one or both images!")
+        return
+
+    # Resize images to the same dimensions for SSIM
+    height, width = reference_image.shape
+    img_resized = cv2.resize(img, (width, height))
+
+    # Compute SSIM
+    ssim_score, diff = ssim(img_resized, reference_image, full=True)
+    diff = (diff * 255).astype("uint8")
+    print(f"SSIM Score: {ssim_score:.2f}")
+    messagebox.showinfo("SSIM Result", f"SSIM Score: {ssim_score:.2f}")
+
+    # Initialize ORB detector
+    orb = cv2.ORB_create()
+
+    # Detect and compute keypoints and descriptors
+    keypoints1, descriptors1 = orb.detectAndCompute(img_resized, None)
+    keypoints2, descriptors2 = orb.detectAndCompute(reference_image, None)
+
+    # Match features using BFMatcher
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+    matches = bf.match(descriptors1, descriptors2)
+
+    # Sort matches by distance
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    # Visualization of SSIM and keypoints
+    fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+    axes[0, 0].imshow(img_resized, cmap="gray")
+    axes[0, 0].set_title("Selected Image")
+    axes[0, 0].axis("off")
+
+    axes[0, 1].imshow(reference_image, cmap="gray")
+    axes[0, 1].set_title("Reference Image")
+    axes[0, 1].axis("off")
+
+    axes[1, 0].imshow(diff, cmap="gray")
+    axes[1, 0].set_title(f"SSIM Difference Map\nSSIM Score: {ssim_score:.2f}")
+    axes[1, 0].axis("off")
+
+    # Draw matches
+    matched_image = cv2.drawMatches(
+        img_resized, keypoints1, reference_image, keypoints2, matches[:50], None, flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS
+    )
+    axes[1, 1].imshow(matched_image, cmap="gray")
+    axes[1, 1].set_title("Feature Matching")
+    axes[1, 1].axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+    # Display matched features
+    display_matched_features(img_resized, reference_image, keypoints1, keypoints2, matches)
+
+    # Determine if the currency is real or fake based on the SSIM score and number of matches
+    if ssim_score > 0.75 and len(matches) > 50:
+        print(f"Good Matches: {len(matches)} - The currency note is genuine.")
+        messagebox.showinfo("Result", "The currency note is genuine.")
+    else:
+        print(f"Good Matches: {len(matches)} - The currency note is fake.")
+        messagebox.showinfo("Result", "The currency note is fake.")
+
+# Function to capture an image from the webcam and process it
+def capture_webcam_image():
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        messagebox.showerror("Error", "Webcam not accessible!")
+        return
+
+    print("Press 'c' to capture and process the image, or 'q' to quit.")
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Failed to grab frame")
+            break
+
+        cv2.imshow("Webcam", frame)
+
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('c'):
+            # Save and process the captured frame
+            captured_image_path = "captured_image.jpg"
+            cv2.imwrite(captured_image_path, frame)
+            print("Image captured and saved.")
+            cap.release()
+            cv2.destroyAllWindows()
+            process_image_with_features(captured_image_path)
+            return
+        elif key == ord('q'):
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+# GUI to select and process images
+def setup_gui():
+    global selected_image_path, reference_image_path
+    selected_image_path = None
+    reference_image_path = None
+
+    root = Tk()
+    root.title("Fake Currency Detection")
+
+    label = Label(root, text="Fake Rs. 100 and 500 Currency Detection System", font=("Arial", 16))
+    label.pack(pady=10)
+
+    select_btn = Button(root, text="Select Image", command=select_image, width=20, height=2)
+    select_btn.pack(pady=10)
+
+    reference_btn = Button(root, text="Select Reference Image", command=select_reference_image, width=20, height=2)
+    reference_btn.pack(pady=10)
+
+    process_btn = Button(root, text="Process Selected Image", command=lambda: process_image_with_features(selected_image_path), width=20, height=2)
+    process_btn.pack(pady=10)
+
+    webcam_btn = Button(root, text="Capture from Webcam", command=capture_webcam_image, width=20, height=2)
+    webcam_btn.pack(pady=10)
+
+    root.mainloop()
+
+# Main function to start the GUI
+if __name__ == "__main__":
+    setup_gui()
 
